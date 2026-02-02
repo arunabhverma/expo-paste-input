@@ -1,123 +1,159 @@
-# TextInputWrapper
+# expo-paste-input
 
-A native Expo module for cross-platform paste event handling in React Native TextInput components.
+`expo-paste-input` is a lightweight wrapper around React Native `TextInput` that lets users paste images and GIFs directly from the system clipboard on **iOS and Android**.
 
-## Demo
+It works at the native level to intercept paste events before React Native handles them, giving you access to pasted media as local file URIs while keeping full control over your own `TextInput` component.
 
-| iOS                                                                                             | Android                                                                                         |
-| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+See the original demo on [Twitter](https://x.com/iamarunabh/status/1997738168247062774)
+
+| iOS | Android |
+| --- | --- |
 | <video src="https://github.com/user-attachments/assets/b54b15ac-5b98-4dc7-84d7-2e7d48e53e24" /> | <video src="https://github.com/user-attachments/assets/4d709a2c-2dca-431d-8972-05f01b7e5276" /> |
 
-## Overview
+---
 
-This is **not a published npm package**. This is the exact production-ready module used inside a real app. If you want to use it, copy the `modules/text-input-wrapper` folder into your Expo project and run it.
+## Features
 
-### What it does
+- Paste **text, images, and multiple GIFs**
+- Works on **iOS and Android**
+- True wrapper around `TextInput` (bring your own input)
+- No custom UI, no opinionated styles
+- Returns local file URIs for pasted media
+- Safe to import on Web (no crash, no-op)
 
-- Intercepts paste events on TextInput components
-- Handles pasted text and images consistently across iOS and Android
-- Supports pasting multiple images, including GIFs
-- Returns file URIs for pasted images that you can use directly
+---
 
-### Paste event payload
+## Installation
 
-```typescript
-type PasteEventPayload =
-  | { type: "text"; value: string }
-  | { type: "images"; uris: string[] }
-  | { type: "unsupported" };
+### Quick install
+
+```bash
+npx expo install expo-paste-input
+````
+
+or
+
+```bash
+yarn add expo-paste-input
 ```
 
-## How it works
+### Rebuild the app (required)
 
-The module wraps a TextInput and intercepts paste events at the native level before they reach the default handler.
+This library uses native code, so you must rebuild.
 
-### iOS
+```bash
+npx expo run:ios
+npx expo run:android
+```
 
-On iOS, the module uses method swizzling to intercept `paste(_:)` on the underlying `UITextField`/`UITextView`. When a paste is detected:
+(Expo Go will not work)
 
-- For **images**: The paste is intercepted, images are extracted from `UIPasteboard`, saved to temp files, and URIs are sent to JavaScript. GIFs are preserved as-is.
-- For **text**: The original paste proceeds normally, and the pasted text is forwarded to JavaScript.
-
-The wrapper view is transparent and passes through all touch events to children.
-
-### Android
-
-On Android, the module uses `OnReceiveContentListener` (API 31+) and a custom `ActionMode.Callback` to intercept paste events from both keyboard and context menu:
-
-- For **images**: The paste is consumed before Android shows the "Can't add images" toast. Images are decoded, saved to cache, and URIs are sent to JavaScript.
-- For **text**: The original paste proceeds normally, and the pasted text is forwarded to JavaScript.
-
-The wrapper view is non-interactive and delegates all touch events to children.
+---
 
 ## Usage
 
-### 1. Copy the module
-
-Copy the `modules/text-input-wrapper` folder into your Expo project's `modules` directory.
-
-### 2. Run prebuild / pod install
-
-```bash
-# If using Expo prebuild
-npx expo prebuild
-
-# Or if you already have native projects
-cd ios && pod install
-```
-
-### 3. Import and use
-
-Wrap your TextInput with `TextInputWrapper` and handle the `onPaste` callback:
+Wrap your `TextInput` with `TextInputWrapper`:
 
 ```tsx
-import {
-  TextInputWrapper,
-  PasteEventPayload,
-} from "@/modules/text-input-wrapper";
+import { TextInputWrapper } from "expo-paste-input";
 import { TextInput } from "react-native";
 
-function MyInput() {
-  const handlePaste = (payload: PasteEventPayload) => {
-    if (payload.type === "images") {
-      // payload.uris contains file:// URIs for each pasted image
-      console.log("Pasted images:", payload.uris);
-    } else if (payload.type === "text") {
-      // payload.value contains the pasted text
-      console.log("Pasted text:", payload.value);
-    }
-  };
-
+export default function MyInput() {
   return (
-    <TextInputWrapper onPaste={handlePaste}>
+    <TextInputWrapper
+      onPaste={(payload) => {
+        console.log(payload);
+      }}
+    >
       <TextInput placeholder="Paste here..." />
     </TextInputWrapper>
   );
 }
 ```
 
-## Notes
+---
 
-- This is **intentionally not packaged as a library**
-- It's meant to be copied, modified, and extended for your specific needs
-- The image URIs point to temporary files — move or copy them if you need persistence
-- Text paste events fire _after_ the text is inserted into the input
-- Image paste events _prevent_ the default paste (since TextInput can't display images)
+## Props
 
-If you want to build a library on top of this, feel free. Please credit **Arunabh Verma** as inspiration.
-
-## Inspiration
-
-This project exists because of inspiration from:
-
-- **[Fernando Rojo](https://x.com/fernandorojo)** — Inspired by his blog post how paste input is implemented in the v0 app
-  - Blog + context: how native paste handling works in v0
-  - 𝕏: **[How we built the v0 iOS app](https://x.com/fernandorojo/status/1993098916456452464)**
-- **[v0](https://v0.dev)** — The real-world product discussed in Fernando Rojo’s writing
-
-Their work on pushing React Native closer to native platform conventions was the catalyst for building this.
+| Prop     | Type                                   | Description                                                                        |
+| -------- | -------------------------------------- | ---------------------------------------------------------------------------------- |
+| children | `React.ReactElement`                   | The `TextInput` (or any custom input) you want to wrap.                            |
+| onPaste  | `(payload: PasteEventPayload) => void` | Callback fired when a paste event is detected. Receives pasted text or image URIs. |
 
 ---
 
-Built by **Arunabh Verma**  
-Demo: [X post ↗](https://x.com/iamarunabh/status/1997738168247062774)
+## Types
+
+```ts
+type PasteEventPayload =
+  | { type: "text"; value: string }
+  | { type: "images"; uris: string[] }
+  | { type: "unsupported" };
+```
+
+* `text` → pasted text
+* `images` → local file URIs (`file://...`)
+* `unsupported` → anything else
+
+---
+
+## Why a wrapper?
+
+This library does **not** reimplement `TextInput`.
+
+Instead:
+
+```tsx
+<TextInputWrapper>
+  <TextInput />
+</TextInputWrapper>
+```
+
+This means:
+
+* you keep full control of your input
+* works with any custom TextInput
+* no prop mirroring
+* future-proof with RN updates
+
+---
+
+## Platform behavior
+
+### iOS
+
+* Intercepts native `paste(_:)`
+* Extracts images from `UIPasteboard`
+* Saves to temp files
+* Preserves GIFs
+
+### Android
+
+* Uses `OnReceiveContentListener` + `ActionMode`
+* Prevents Android "Can't paste images" toast
+* Saves pasted media to cache
+
+---
+
+## Notes
+
+* Image URIs are temporary files, move them if you need persistence.
+* Text paste events fire after the text is inserted.
+* Image paste events prevent default paste (since TextInput can't render images).
+* Web is currently a no-op implementation.
+
+---
+
+## Inspiration
+
+Inspired by work from:
+
+- **Fernando Rojo** — [native paste handling in the v0 app](https://x.com/fernandorojo/status/1993098916456452464)
+
+- **v0.dev** — real-world product pushing React Native closer to native UX
+
+---
+
+## License
+
+MIT
