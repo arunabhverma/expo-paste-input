@@ -1,21 +1,15 @@
-require 'json'
-
-package = JSON.parse(File.read(File.join(__dir__, '..', 'package.json')))
-
 Pod::Spec.new do |s|
   s.name           = 'ExpoPasteInput'
-  s.version        = package['version']
-  s.summary        = package['description']
-  s.description    = package['description']
-  s.license        = package['license']
-  s.author         = package['author']
-  s.homepage       = package['homepage']
+  s.version        = '1.0.0'
+  s.summary        = 'Native text input wrapper with paste event handling'
+  s.description    = 'Expo module providing cross-platform paste event detection for text inputs with support for text and image content'
+  s.author         = 'Arunabh Verma'
+  s.homepage       = 'https://github.com/arunabhverma/expo-paste-input'
   s.platforms      = {
     :ios => '15.1',
     :tvos => '15.1'
   }
-  s.swift_version  = '5.9'
-  s.source         = { git: 'https://github.com/arunabhverma/expo-paste-input' }
+  s.source         = { git: 'https://github.com/arunabhverma/expo-paste-input.git', tag: "v#{s.version}" }
   s.static_framework = true
 
   s.dependency 'ExpoModulesCore'

@@ -1,20 +1,16 @@
-import { PasteEventPayload, TextInputWrapper } from "expo-paste-input";
 import { Feather, Ionicons } from "@expo/vector-icons/";
 import { useTheme } from "@react-navigation/native";
 import Color from "color";
-import { GlassView } from "expo-glass-effect";
 import { Image } from "expo-image";
 import React, { useEffect, useRef, useState } from "react";
 import {
   FlatList,
   LayoutChangeEvent,
-  Platform,
   Pressable,
   StyleSheet,
   TextInput,
   View,
 } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import Animated, {
   FadeIn,
   FadeOut,
@@ -27,52 +23,26 @@ import Animated, {
   ZoomIn,
   ZoomOut,
 } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
-const AnimatedGlassView = Animated.createAnimatedComponent(GlassView);
-const createRandomString = (length = 16) => {
-  const chars =
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let result = "";
-
-  for (let i = 0; i < length; i++) {
-    const randomIndex = Math.floor(Math.random() * chars.length);
-    result += chars[randomIndex];
-  }
-
-  return result;
-};
-
-const isAndroid = Platform.OS === "android";
-
 export default function Index() {
-  const { bottom } = useSafeAreaInsets();
   return (
-    <KeyboardAvoidingView
-      behavior={"padding"}
-      style={{ flex: 1 }}
-      keyboardVerticalOffset={-bottom}
-    >
-      <View style={{ flex: 1 }}>
-        <FlatList
-          data={[]}
-          renderItem={() => <View />}
-          style={{ flex: 1 }}
-          keyboardDismissMode="interactive"
-          contentContainerStyle={{ flex: 1, flexGrow: 1 }}
-        />
-        <InputToolbar />
-      </View>
-    </KeyboardAvoidingView>
+    <View style={styles.container}>
+      <FlatList
+        data={[]}
+        renderItem={() => <View />}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ flex: 1, flexGrow: 1 }}
+      />
+      <InputToolbar />
+    </View>
   );
 }
 
 const InputToolbar = () => {
   const attachmentsListRef =
     useRef<FlatList<{ id: string; uri: string }>>(null);
-  const { bottom } = useSafeAreaInsets();
   const theme = useTheme();
   const previousContentWidth = useRef(0);
   const scrollViewPadding = useSharedValue(0);
@@ -95,37 +65,25 @@ const InputToolbar = () => {
     itemWidth.value = width;
   };
 
-  const onPaste = (payload: PasteEventPayload) => {
-    if (payload.type === "images") {
-      setAttachments((prev) => [
-        ...prev,
-        ...payload.uris.map((uri) => ({ id: createRandomString(), uri })),
-      ]);
-    }
-  };
-
   return (
     <LayoutAnimationConfig skipEntering skipExiting>
       <Animated.View
         layout={LinearTransition.springify()}
-        style={[styles.inputToolbar, { paddingBottom: bottom }]}
+        style={[styles.inputToolbar]}
       >
-        <AnimatedGlassView
+        <Animated.View
           layout={LinearTransition.springify()}
           style={[
             styles.inputContainer,
-            isAndroid && [
-              {
-                backgroundColor: theme.colors.card,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: theme.colors.border,
-                boxShadow: `0px 5px 5px ${Color(theme.colors.border)
-                  .alpha(0.5)
-                  .toString()}`,
-              },
-            ],
+            {
+              backgroundColor: theme.colors.card,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: theme.colors.border,
+              boxShadow: `0px 5px 5px ${Color(theme.colors.border)
+                .alpha(0.5)
+                .toString()}`,
+            },
           ]}
-          isInteractive
         >
           {attachments.length > 0 && (
             <Animated.FlatList
@@ -186,44 +144,38 @@ const InputToolbar = () => {
             />
           )}
           <Animated.View layout={LinearTransition.springify()}>
-            <TextInputWrapper onPaste={onPaste}>
-              <TextInput
-                multiline
-                placeholder="Type a message"
-                placeholderTextColor={theme.colors.border}
-                cursorColor={theme.colors.primary}
-                selectionHandleColor={theme.colors.primary}
-                selectionColor={
-                  isAndroid
-                    ? Color(theme.colors.primary).alpha(0.3).toString()
-                    : theme.colors.primary
-                }
-                style={[styles.input, { color: theme.colors.text }]}
-              />
-            </TextInputWrapper>
+            <TextInput
+              multiline
+              placeholder="Type a message"
+              placeholderTextColor={theme.colors.border}
+              cursorColor={theme.colors.primary}
+              selectionHandleColor={theme.colors.primary}
+              selectionColor={Color(theme.colors.primary).alpha(0.3).toString()}
+              style={[
+                styles.input,
+                { color: theme.colors.text, outline: "none" },
+              ]}
+            />
           </Animated.View>
-        </AnimatedGlassView>
-        <AnimatedGlassView
+        </Animated.View>
+        <Animated.View
           layout={LinearTransition.springify()}
           style={[
             styles.sendButtonContainer,
-            isAndroid && [
-              {
-                backgroundColor: theme.colors.card,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: theme.colors.border,
-                boxShadow: `0px 5px 5px ${Color(theme.colors.border)
-                  .alpha(0.5)
-                  .toString()}`,
-              },
-            ],
+            {
+              backgroundColor: theme.colors.card,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: theme.colors.border,
+              boxShadow: `0px 5px 5px ${Color(theme.colors.border)
+                .alpha(0.5)
+                .toString()}`,
+            },
           ]}
-          isInteractive
         >
           <Pressable style={styles.sendButton} hitSlop={20}>
             <Feather name="arrow-right" size={20} color={theme.colors.text} />
           </Pressable>
-        </AnimatedGlassView>
+        </Animated.View>
       </Animated.View>
     </LayoutAnimationConfig>
   );
@@ -281,6 +233,14 @@ const fadeZoomOut = () => {
 };
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    width: "100%",
+    maxWidth: 400,
+    minWidth: 200,
+    marginHorizontal: "auto",
+    marginBottom: 50,
+  },
   content: {
     flex: 1,
   },
