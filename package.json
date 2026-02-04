@@ -4,6 +4,15 @@
   "description": "A wrapper around React Native TextInput to paste images and GIFs from the clipboard (iOS, Android, Web)",
   "main": "build/index.js",
   "types": "build/index.d.ts",
+  "files": [
+    "build",
+    "android",
+    "ios",
+    "src",
+    "expo-module.config.json",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "expo-module build",
     "clean": "expo-module clean",
