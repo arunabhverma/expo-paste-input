@@ -38,6 +38,8 @@ local.properties
 android.iml
 android/app/libs
 android/keystores/debug.keystore
+android/build
+android/.gradle
 
 # Cocoapods
 #
