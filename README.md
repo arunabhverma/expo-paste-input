@@ -8,7 +8,8 @@ See the original demo on [Twitter](https://x.com/iamarunabh/status/1997738168247
 
 | iOS | Android |
 | --- | --- |
-| <video src="https://github.com/user-attachments/assets/b54b15ac-5b98-4dc7-84d7-2e7d48e53e24" /> | <video src="https://github.com/user-attachments/assets/4d709a2c-2dca-431d-8972-05f01b7e5276" /> |
+| <img src="https://github.com/user-attachments/assets/c7d9baac-b2f8-4942-9a7f-52932e65ae7e" /> | <img src="https://github.com/user-attachments/assets/6057745c-ccfc-4ca0-935d-9aa4668f22e3" /> |
+
 
 ---
 
