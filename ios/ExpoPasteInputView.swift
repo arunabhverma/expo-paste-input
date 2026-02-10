@@ -77,6 +77,13 @@ class ExpoPasteInputView: ExpoView {
     super.didAddSubview(subview)
     startMonitoring()
   }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    if !isMonitoring {
+      startMonitoring()
+    }
+  }
   
   private func startMonitoring() {
     guard !isMonitoring else { return }
@@ -302,9 +309,7 @@ class ExpoPasteInputView: ExpoView {
   }
   
   private func findTextInputInView(_ view: UIView) -> UIView? {
-    let className = String(describing: type(of: view))
-    if className.contains("RCTUITextField") || className.contains("RCTUITextView") ||
-       className.contains("UITextField") || className.contains("UITextView") {
+    if view is TextInputEnhanceable {
       return view
     }
     
