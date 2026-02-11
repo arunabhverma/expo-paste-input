@@ -21,6 +21,7 @@ See the original demo on [Twitter](https://x.com/iamarunabh/status/1997738168247
 - No custom UI, no opinionated styles
 - Returns local file URIs for pasted media
 - Safe to import on Web (no crash, no-op)
+- Supports Expo SwiftUI `TextField` as well.
 
 ---
 
