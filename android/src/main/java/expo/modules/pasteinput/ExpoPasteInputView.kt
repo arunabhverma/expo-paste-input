@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.view.ActionMode
@@ -18,16 +19,26 @@ import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.IOException
 
 class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   private val onPaste by EventDispatcher()
   private var textInputView: EditText? = null
   private var isMonitoring: Boolean = false
   private var contentListener: OnReceiveContentListener? = null
-  private var originalActionModeCallback: ActionMode.Callback? = null
-  private var customActionModeCallback: ActionMode.Callback? = null
+  private var originalSelectionActionModeCallback: ActionMode.Callback? = null
+  private var originalInsertionActionModeCallback: ActionMode.Callback? = null
+  private var customSelectionActionModeCallback: ActionMode.Callback? = null
+  private var customInsertionActionModeCallback: ActionMode.Callback? = null
+  private var suppressOnReceiveContentUntilMs: Long = 0L
+  
+  private data class ClipboardPayload(
+    val imageUris: List<Uri>,
+    val gifUris: List<Uri>,
+    val textContent: String?
+  ) {
+    val hasImages: Boolean
+      get() = imageUris.isNotEmpty() || gifUris.isNotEmpty()
+  }
   
   init {
     // Make view completely transparent and non-interactive - only monitor paste events
@@ -102,8 +113,10 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     isMonitoring = false
     textInputView = null
     contentListener = null
-    originalActionModeCallback = null
-    customActionModeCallback = null
+    originalSelectionActionModeCallback = null
+    originalInsertionActionModeCallback = null
+    customSelectionActionModeCallback = null
+    customInsertionActionModeCallback = null
   }
   
   private fun setupPasteHandling(editText: EditText) {
@@ -129,66 +142,33 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     }
     
     // Restore original ActionMode.Callback
-    if (customActionModeCallback != null) {
-      editText.customSelectionActionModeCallback = originalActionModeCallback
+    if (customSelectionActionModeCallback != null) {
+      editText.customSelectionActionModeCallback = originalSelectionActionModeCallback
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && customInsertionActionModeCallback != null) {
+      editText.customInsertionActionModeCallback = originalInsertionActionModeCallback
     }
   }
   
   private fun createContentListener(): OnReceiveContentListener {
-    return OnReceiveContentListener { view, payload ->
-      val clip = payload.clip
-      val itemCount = clip.itemCount
-      
-      if (itemCount == 0) {
-        return@OnReceiveContentListener payload
-      }
-      
-      // Collect images and GIFs separately
-      val imageUris = mutableListOf<Uri>()
-      val gifUris = mutableListOf<Uri>()
-      var textContent: String? = null
-      
-      // Process each item in the clip
-      for (i in 0 until itemCount) {
-        val item = clip.getItemAt(i)
-        
-        // Check for image URI
-        val uri = item.uri
-        if (uri != null) {
-          val mimeType = context.contentResolver.getType(uri)
-          if (mimeType != null && mimeType.startsWith("image/")) {
-            // Separate GIFs from regular images
-            if (mimeType == "image/gif") {
-              gifUris.add(uri)
-            } else {
-              imageUris.add(uri)
-            }
-          }
-        }
-        
-        // Check for text
-        val text = item.text
-        if (!text.isNullOrEmpty() && textContent == null) {
-          textContent = text.toString()
-        }
-      }
-      
-      // Handle GIFs and images (always as array, even for single item)
-      if (gifUris.isNotEmpty() || imageUris.isNotEmpty()) {
-        processMultipleImagePaste(imageUris, gifUris)
-        // Return null to completely consume the content and prevent default paste
-        // This prevents Android from showing the "Can't add images" toast
+    return OnReceiveContentListener { _, payload ->
+      if (shouldSuppressOnReceiveContent()) {
         return@OnReceiveContentListener null
       }
       
-      // Handle text
-      if (textContent != null) {
-        handleTextPaste(textContent)
-        // Allow default text paste behavior
+      val parsed = parseClipboardPayload(payload.clip, context)
+      if (parsed.hasImages) {
+        processMultipleImagePaste(parsed.imageUris, parsed.gifUris)
+        // Consume image content to prevent default EditText "can't paste image" UX.
+        return@OnReceiveContentListener null
+      }
+      
+      if (!parsed.textContent.isNullOrEmpty()) {
+        handleTextPaste(parsed.textContent)
+        // Keep native text insertion behavior.
         return@OnReceiveContentListener payload
       }
       
-      // Unsupported content type
       handleUnsupportedPaste()
       return@OnReceiveContentListener payload
     }
@@ -198,107 +178,180 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     // Intercept paste from context menu to prevent toast
     // This must happen BEFORE Android tries to paste, otherwise the toast appears
     try {
-      // Store original callback if it exists
-      originalActionModeCallback = editText.customSelectionActionModeCallback
+      // Store original callbacks if they exist
+      originalSelectionActionModeCallback = editText.customSelectionActionModeCallback
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        originalInsertionActionModeCallback = editText.customInsertionActionModeCallback
+      }
       
       // Set up a custom ActionMode.Callback to intercept paste from context menu
       // This is the most reliable way to intercept paste before the toast appears
-      customActionModeCallback = object : ActionMode.Callback {
+      val callback = object : ActionMode.Callback {
         override fun onCreateActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean {
           // Delegate to original callback if it exists
-          return originalActionModeCallback?.onCreateActionMode(mode, menu) ?: true
+          return getOriginalActionModeCallback()?.onCreateActionMode(mode, menu) ?: true
         }
         
         override fun onPrepareActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean {
           // Delegate to original callback if it exists
-          return originalActionModeCallback?.onPrepareActionMode(mode, menu) ?: false
+          return getOriginalActionModeCallback()?.onPrepareActionMode(mode, menu) ?: false
         }
         
         override fun onActionItemClicked(mode: ActionMode?, item: android.view.MenuItem?): Boolean {
           if (item?.itemId == android.R.id.paste) {
-            // Intercept paste action
-            val clipboard = editText.context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clipData = clipboard.primaryClip
-            
-            if (clipData != null && clipData.itemCount > 0) {
-              // Collect images and GIFs separately
-              val imageUris = mutableListOf<Uri>()
-              val gifUris = mutableListOf<Uri>()
-              var textContent: String? = null
-              
-              // Process all items in the clipboard
-              for (i in 0 until clipData.itemCount) {
-                val clipItem = clipData.getItemAt(i)
-                val uri = clipItem.uri
-                
-                // Check if it's an image
-                if (uri != null) {
-                  val mimeType = editText.context.contentResolver.getType(uri)
-                  if (mimeType != null && mimeType.startsWith("image/")) {
-                    // Separate GIFs from regular images
-                    if (mimeType == "image/gif") {
-                      gifUris.add(uri)
-                    } else {
-                      imageUris.add(uri)
-                    }
-                  }
-                }
-                
-                // Check for text (only take first text item)
-                if (textContent == null) {
-                  val text = clipItem.text
-                  if (!text.isNullOrEmpty()) {
-                    textContent = text.toString()
-                  }
-                }
-              }
-              
-              // Handle GIFs and images (always as array, even for single item)
-              if (gifUris.isNotEmpty() || imageUris.isNotEmpty()) {
-                processMultipleImagePaste(imageUris, gifUris)
-                mode?.finish()
-                return true // We handled it, prevent default paste
-              }
-              
-              // Check for text
-              if (textContent != null) {
-                // For text, let the normal paste logic run, then notify JS
-                var handled = false
-                
-                // 1) Let any existing callback handle it
-                if (originalActionModeCallback != null) {
-                  handled = originalActionModeCallback!!.onActionItemClicked(mode, item)
-                }
-                
-                // 2) If nothing handled it, fall back to EditText's default handler
-                if (!handled && item != null) {
-                  handled = editText.onTextContextMenuItem(item.itemId)
-                }
-                
-                if (handled) {
-                  handleTextPaste(textContent)
-                }
-                mode?.finish()
-                return handled
-              }
-            }
+            return handlePasteFromActionMode(editText, mode, item, getOriginalActionModeCallback())
           }
           
           // For other actions, delegate to original callback or return false
-          return originalActionModeCallback?.onActionItemClicked(mode, item) ?: false
+          return getOriginalActionModeCallback()?.onActionItemClicked(mode, item) ?: false
         }
         
         override fun onDestroyActionMode(mode: ActionMode?) {
           // Delegate to original callback if it exists
-          originalActionModeCallback?.onDestroyActionMode(mode)
+          getOriginalActionModeCallback()?.onDestroyActionMode(mode)
         }
       }
       
-      editText.customSelectionActionModeCallback = customActionModeCallback
+      customSelectionActionModeCallback = callback
+      editText.customSelectionActionModeCallback = customSelectionActionModeCallback
+
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        customInsertionActionModeCallback = callback
+        editText.customInsertionActionModeCallback = customInsertionActionModeCallback
+      }
       
     } catch (e: Exception) {
       // If ActionMode.Callback approach fails, we'll rely on OnReceiveContentListener
       // which should still work but may show the toast briefly
+    }
+  }
+
+  private fun getOriginalActionModeCallback(): ActionMode.Callback? {
+    // Cursor/insertion menu and selection menu can use different callbacks.
+    // Prefer insertion callback first for insertion-mode paste.
+    return originalInsertionActionModeCallback ?: originalSelectionActionModeCallback
+  }
+  
+  private fun handlePasteFromActionMode(
+    editText: EditText,
+    mode: ActionMode?,
+    item: android.view.MenuItem,
+    originalCallback: ActionMode.Callback?
+  ): Boolean {
+    val clipboard = editText.context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val parsed = parseClipboardPayload(clipboard.primaryClip, editText.context)
+    
+    if (parsed.hasImages) {
+      markSuppressOnReceiveContent()
+      processMultipleImagePaste(parsed.imageUris, parsed.gifUris)
+      mode?.finish()
+      return true
+    }
+    
+    val text = parsed.textContent
+    if (!text.isNullOrEmpty()) {
+      var handled = originalCallback?.onActionItemClicked(mode, item) ?: false
+      if (!handled) {
+        handled = editText.onTextContextMenuItem(item.itemId)
+      }
+      if (!handled) {
+        insertTextAtCursor(editText, text)
+        handled = true
+      }
+      
+      if (handled) {
+        // On Android < 12, ActionMode path is the only reliable callback for text.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+          handleTextPaste(text)
+        }
+        markSuppressOnReceiveContent()
+        mode?.finish()
+        return true
+      }
+    }
+    
+    handleUnsupportedPaste()
+    mode?.finish()
+    return true
+  }
+
+  private fun parseClipboardPayload(
+    clipData: android.content.ClipData?,
+    sourceContext: Context
+  ): ClipboardPayload {
+    if (clipData == null || clipData.itemCount <= 0) {
+      return ClipboardPayload(emptyList(), emptyList(), null)
+    }
+    
+    val imageUris = mutableListOf<Uri>()
+    val gifUris = mutableListOf<Uri>()
+    var textContent: String? = null
+    
+    for (i in 0 until clipData.itemCount) {
+      val clipItem = clipData.getItemAt(i)
+      val uri = clipItem.uri
+      if (uri != null) {
+        val mimeType = sourceContext.contentResolver.getType(uri)?.lowercase()
+        if (mimeType != null && mimeType.startsWith("image/")) {
+          if (mimeType == "image/gif") {
+            gifUris.add(uri)
+          } else {
+            imageUris.add(uri)
+          }
+        } else if (isLikelyImageUri(uri)) {
+          imageUris.add(uri)
+        }
+      }
+      
+      if (textContent == null) {
+        val text = clipItem.coerceToText(sourceContext)
+        if (!text.isNullOrEmpty()) {
+          textContent = text.toString()
+        }
+      }
+    }
+    
+    return ClipboardPayload(
+      imageUris = imageUris,
+      gifUris = gifUris,
+      textContent = textContent
+    )
+  }
+
+  private fun isLikelyImageUri(uri: Uri): Boolean {
+    val fileName = uri.lastPathSegment?.lowercase() ?: return false
+    return fileName.endsWith(".png") ||
+      fileName.endsWith(".jpg") ||
+      fileName.endsWith(".jpeg") ||
+      fileName.endsWith(".gif") ||
+      fileName.endsWith(".webp") ||
+      fileName.endsWith(".heic") ||
+      fileName.endsWith(".heif")
+  }
+
+  private fun markSuppressOnReceiveContent() {
+    suppressOnReceiveContentUntilMs = SystemClock.elapsedRealtime() + 500L
+  }
+
+  private fun shouldSuppressOnReceiveContent(): Boolean {
+    return SystemClock.elapsedRealtime() <= suppressOnReceiveContentUntilMs
+  }
+
+  private fun insertTextAtCursor(editText: EditText, text: String) {
+    val editable = editText.editableText ?: return
+    val start = editText.selectionStart
+    val end = editText.selectionEnd
+
+    val replaceStart = minOf(start, end).coerceAtLeast(0)
+    val replaceEnd = maxOf(start, end).coerceAtLeast(0)
+
+    if (replaceStart <= replaceEnd && replaceEnd <= editable.length) {
+      editable.replace(replaceStart, replaceEnd, text)
+      val newCursor = (replaceStart + text.length).coerceAtMost(editable.length)
+      editText.setSelection(newCursor)
+    } else {
+      editable.append(text)
+      editText.setSelection(editable.length)
     }
   }
   

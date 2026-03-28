@@ -27,6 +27,8 @@ class ExpoPasteInputView: ExpoView {
   private let onPaste = EventDispatcher()
   private var textInputView: UIView?
   private var isMonitoring: Bool = false
+  private let gifTypes: Set<String> = ["com.compuserve.gif", "public.gif", "image/gif"]
+  private let webpTypes: Set<String> = ["org.webmproject.webp", "public.webp", "image/webp"]
   // Track which classes have been swizzled (once per class, never unswizzle)
   private static var swizzledClasses: Set<String> = []
   
@@ -146,11 +148,11 @@ class ExpoPasteInputView: ExpoView {
         let swizzledImplementation: @convention(block) (AnyObject, Selector, Any?) -> Bool = { object, action, sender in
           // Check if this text input is associated with a wrapper
           if let weakWrapper = objc_getAssociatedObject(object, &textInputWrapperKey) as? WeakWrapper,
-             weakWrapper.value != nil {
+             let wrapper = weakWrapper.value {
             // Only process if this is our wrapped text input
             if action == #selector(UIResponderStandardEditActions.paste(_:)) {
               let pasteboard = UIPasteboard.general
-              if pasteboard.hasImages || pasteboard.hasStrings {
+              if pasteboard.hasStrings || wrapper.hasSupportedImageContent(in: pasteboard) {
                 return true
               }
             }
@@ -203,9 +205,8 @@ class ExpoPasteInputView: ExpoView {
           
           // CRITICAL: Check for GIFs FIRST using explicit type queries
           // This gets raw data without triggering UIImage conversion
-          let gifTypes = ["com.compuserve.gif", "public.gif", "image/gif"]
           var hasGIF = false
-          for gifType in gifTypes {
+          for gifType in wrapper.gifTypes {
             if let gifData = pasteboard.data(forPasteboardType: gifType), !gifData.isEmpty {
               hasGIF = true
               break
@@ -216,7 +217,7 @@ class ExpoPasteInputView: ExpoView {
           if !hasGIF {
             for item in pasteboard.items {
               for (key, _) in item {
-                if gifTypes.contains(key) || key.lowercased().contains("gif") {
+                if wrapper.gifTypes.contains(key) || key.lowercased().contains("gif") {
                   hasGIF = true
                   break
                 }
@@ -243,8 +244,9 @@ class ExpoPasteInputView: ExpoView {
               }
               
               // Check if this looks like image data
-              let isImageKey = key.contains("image") || key.contains("png") || key.contains("jpeg") || 
-                              key.contains("jpg") || key.contains("tiff")
+              let isImageKey = key.contains("image") || key.contains("png") || key.contains("jpeg") ||
+                key.contains("jpg") || key.contains("tiff") || key.contains("heic") ||
+                key.contains("heif") || key.contains("webp")
               
               if isImageKey && (value is Data || value is UIImage) {
                 hasImageData = true
@@ -267,7 +269,7 @@ class ExpoPasteInputView: ExpoView {
           
           // Fallback: check hasImages only if no image data found in items
           // This is safer as we've already checked for GIFs above
-          if pasteboard.hasImages {
+          if pasteboard.hasImages || wrapper.hasPasteboardData(forAnyTypeIn: wrapper.webpTypes, pasteboard: pasteboard) {
             DispatchQueue.main.async {
               wrapper.processPasteboardContent()
             }
@@ -326,8 +328,17 @@ class ExpoPasteInputView: ExpoView {
     // This method is only called for image pastes
     let pasteboard = UIPasteboard.general
     
-    let gifTypes: Set<String> = ["com.compuserve.gif", "public.gif", "image/gif"]
-    let staticImageTypes = ["public.png", "public.jpeg", "public.tiff", "public.heic", "public.image"]
+    let staticImageTypes = [
+      "public.png",
+      "public.jpeg",
+      "public.tiff",
+      "public.heic",
+      "public.heif",
+      "public.image",
+      "org.webmproject.webp",
+      "public.webp",
+      "image/webp"
+    ]
     
     var gifDataItems: [Data] = []
     var staticImages: [UIImage] = []
@@ -594,6 +605,50 @@ class ExpoPasteInputView: ExpoView {
   
   deinit {
     stopMonitoring()
+  }
+
+  private func hasSupportedImageContent(in pasteboard: UIPasteboard) -> Bool {
+    if pasteboard.hasImages {
+      return true
+    }
+
+    if hasPasteboardData(forAnyTypeIn: gifTypes.union(webpTypes), pasteboard: pasteboard) {
+      return true
+    }
+
+    for item in pasteboard.items {
+      for (key, value) in item {
+        let lowercasedKey = key.lowercased()
+        let isImageLikeType = lowercasedKey.contains("image") ||
+          lowercasedKey.contains("png") ||
+          lowercasedKey.contains("jpeg") ||
+          lowercasedKey.contains("jpg") ||
+          lowercasedKey.contains("tiff") ||
+          lowercasedKey.contains("heic") ||
+          lowercasedKey.contains("heif") ||
+          lowercasedKey.contains("gif") ||
+          lowercasedKey.contains("webp")
+
+        if isImageLikeType && (value is Data || value is UIImage) {
+          return true
+        }
+
+        if value is UIImage {
+          return true
+        }
+      }
+    }
+
+    return false
+  }
+
+  private func hasPasteboardData(forAnyTypeIn types: Set<String>, pasteboard: UIPasteboard) -> Bool {
+    for type in types {
+      if let data = pasteboard.data(forPasteboardType: type), !data.isEmpty {
+        return true
+      }
+    }
+    return false
   }
 }
 
