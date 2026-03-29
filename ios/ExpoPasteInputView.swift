@@ -151,10 +151,12 @@ class ExpoPasteInputView: ExpoView {
              let wrapper = weakWrapper.value {
             // Only process if this is our wrapped text input
             if action == #selector(UIResponderStandardEditActions.paste(_:)) {
-              let pasteboard = UIPasteboard.general
-              if pasteboard.hasStrings || wrapper.hasSupportedImageContent(in: pasteboard) {
-                return true
-              }
+              // IMPORTANT:
+              // Do not read UIPasteboard content here. iOS may show the
+              // "App would like to paste" privacy prompt on menu-open checks.
+              // We allow paste action visibility and read the pasteboard only
+              // when the user explicitly taps Paste in `paste(_:)`.
+              return true
             }
           }
           
@@ -605,41 +607,6 @@ class ExpoPasteInputView: ExpoView {
   
   deinit {
     stopMonitoring()
-  }
-
-  private func hasSupportedImageContent(in pasteboard: UIPasteboard) -> Bool {
-    if pasteboard.hasImages {
-      return true
-    }
-
-    if hasPasteboardData(forAnyTypeIn: gifTypes.union(webpTypes), pasteboard: pasteboard) {
-      return true
-    }
-
-    for item in pasteboard.items {
-      for (key, value) in item {
-        let lowercasedKey = key.lowercased()
-        let isImageLikeType = lowercasedKey.contains("image") ||
-          lowercasedKey.contains("png") ||
-          lowercasedKey.contains("jpeg") ||
-          lowercasedKey.contains("jpg") ||
-          lowercasedKey.contains("tiff") ||
-          lowercasedKey.contains("heic") ||
-          lowercasedKey.contains("heif") ||
-          lowercasedKey.contains("gif") ||
-          lowercasedKey.contains("webp")
-
-        if isImageLikeType && (value is Data || value is UIImage) {
-          return true
-        }
-
-        if value is UIImage {
-          return true
-        }
-      }
-    }
-
-    return false
   }
 
   private func hasPasteboardData(forAnyTypeIn types: Set<String>, pasteboard: UIPasteboard) -> Bool {

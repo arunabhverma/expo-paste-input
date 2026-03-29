@@ -184,39 +184,18 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
         originalInsertionActionModeCallback = editText.customInsertionActionModeCallback
       }
       
-      // Set up a custom ActionMode.Callback to intercept paste from context menu
-      // This is the most reliable way to intercept paste before the toast appears
-      val callback = object : ActionMode.Callback {
-        override fun onCreateActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean {
-          // Delegate to original callback if it exists
-          return getOriginalActionModeCallback()?.onCreateActionMode(mode, menu) ?: true
-        }
-        
-        override fun onPrepareActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean {
-          // Delegate to original callback if it exists
-          return getOriginalActionModeCallback()?.onPrepareActionMode(mode, menu) ?: false
-        }
-        
-        override fun onActionItemClicked(mode: ActionMode?, item: android.view.MenuItem?): Boolean {
-          if (item?.itemId == android.R.id.paste) {
-            return handlePasteFromActionMode(editText, mode, item, getOriginalActionModeCallback())
-          }
-          
-          // For other actions, delegate to original callback or return false
-          return getOriginalActionModeCallback()?.onActionItemClicked(mode, item) ?: false
-        }
-        
-        override fun onDestroyActionMode(mode: ActionMode?) {
-          // Delegate to original callback if it exists
-          getOriginalActionModeCallback()?.onDestroyActionMode(mode)
-        }
-      }
-      
-      customSelectionActionModeCallback = callback
+      // Set up custom callbacks to intercept paste from both selection and insertion menus.
+      customSelectionActionModeCallback = createActionModeCallback(
+        editText = editText,
+        originalCallback = originalSelectionActionModeCallback
+      )
       editText.customSelectionActionModeCallback = customSelectionActionModeCallback
 
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        customInsertionActionModeCallback = callback
+        customInsertionActionModeCallback = createActionModeCallback(
+          editText = editText,
+          originalCallback = originalInsertionActionModeCallback
+        )
         editText.customInsertionActionModeCallback = customInsertionActionModeCallback
       }
       
@@ -226,10 +205,35 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     }
   }
 
-  private fun getOriginalActionModeCallback(): ActionMode.Callback? {
-    // Cursor/insertion menu and selection menu can use different callbacks.
-    // Prefer insertion callback first for insertion-mode paste.
-    return originalInsertionActionModeCallback ?: originalSelectionActionModeCallback
+  private fun createActionModeCallback(
+    editText: EditText,
+    originalCallback: ActionMode.Callback?
+  ): ActionMode.Callback {
+    return object : ActionMode.Callback {
+        override fun onCreateActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean {
+          // Delegate to original callback if it exists
+          return originalCallback?.onCreateActionMode(mode, menu) ?: true
+        }
+        
+        override fun onPrepareActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean {
+          // Delegate to original callback if it exists
+          return originalCallback?.onPrepareActionMode(mode, menu) ?: false
+        }
+        
+        override fun onActionItemClicked(mode: ActionMode?, item: android.view.MenuItem?): Boolean {
+          if (item?.itemId == android.R.id.paste) {
+            return handlePasteFromActionMode(editText, mode, item, originalCallback)
+          }
+          
+          // For other actions, delegate to original callback or return false
+          return originalCallback?.onActionItemClicked(mode, item) ?: false
+        }
+        
+        override fun onDestroyActionMode(mode: ActionMode?) {
+          // Delegate to original callback if it exists
+          originalCallback?.onDestroyActionMode(mode)
+        }
+      }
   }
   
   private fun handlePasteFromActionMode(
@@ -298,6 +302,8 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
           } else {
             imageUris.add(uri)
           }
+        } else if (isLikelyGifUri(uri)) {
+          gifUris.add(uri)
         } else if (isLikelyImageUri(uri)) {
           imageUris.add(uri)
         }
@@ -323,10 +329,14 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     return fileName.endsWith(".png") ||
       fileName.endsWith(".jpg") ||
       fileName.endsWith(".jpeg") ||
-      fileName.endsWith(".gif") ||
       fileName.endsWith(".webp") ||
       fileName.endsWith(".heic") ||
       fileName.endsWith(".heif")
+  }
+
+  private fun isLikelyGifUri(uri: Uri): Boolean {
+    val fileName = uri.lastPathSegment?.lowercase() ?: return false
+    return fileName.endsWith(".gif")
   }
 
   private fun markSuppressOnReceiveContent() {
@@ -404,12 +414,18 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
           
           // Save to cache directory
           val cacheDir = context.cacheDir
+          val usePng = bitmap.hasAlpha()
+          val fileExtension = if (usePng) "png" else "jpg"
           // Use UUID-like approach for better uniqueness: timestamp + counter
-          val fileName = "${System.currentTimeMillis()}_${filePaths.size}.jpg"
+          val fileName = "${System.currentTimeMillis()}_${filePaths.size}.$fileExtension"
           val file = File(cacheDir, fileName)
           
           FileOutputStream(file).use { outputStream ->
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+            if (usePng) {
+              bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+            } else {
+              bitmap.compress(Bitmap.CompressFormat.JPEG, 80, outputStream)
+            }
             outputStream.flush()
           }
           
