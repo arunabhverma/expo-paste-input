@@ -492,12 +492,15 @@ class ExpoPasteInputView: ExpoView {
       // Then, add static image file paths
       if !images.isEmpty {
         for image in images {
+          let normalizedImage = image.normalizedOrientation()
+          let hasAlpha = normalizedImage.hasAlpha
+
           // Preserve transparency for images with alpha channel
           let imageData: Data?
-          if image.hasAlpha {
-            imageData = image.pngData()
+          if hasAlpha {
+            imageData = normalizedImage.pngData()
           } else {
-            imageData = image.jpegData(compressionQuality: 0.8)
+            imageData = normalizedImage.jpegData(compressionQuality: 0.8)
           }
           
           guard let imageData = imageData else {
@@ -505,7 +508,7 @@ class ExpoPasteInputView: ExpoView {
           }
           
           let tempDir = FileManager.default.temporaryDirectory
-          let fileExtension = image.hasAlpha ? ".png" : ".jpg"
+          let fileExtension = hasAlpha ? ".png" : ".jpg"
           let fileName = UUID().uuidString + fileExtension
           let fileURL = tempDir.appendingPathComponent(fileName)
           
@@ -563,13 +566,10 @@ class ExpoPasteInputView: ExpoView {
       return nil
     }
     
-    // Get the first image from the source
-    guard let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+    // Create UIImage from the original data so imageOrientation from metadata is preserved.
+    guard let image = UIImage(data: data) else {
       return nil
     }
-    
-    // Create UIImage from CGImage (this is safer than UIImage(data:))
-    let image = UIImage(cgImage: cgImage)
     
     // Validate the image has valid dimensions
     guard image.size.width > 0 && image.size.height > 0 else {
@@ -624,5 +624,18 @@ extension UIImage {
     guard let cgImage = self.cgImage else { return false }
     let alphaInfo = cgImage.alphaInfo
     return alphaInfo != .none && alphaInfo != .noneSkipFirst && alphaInfo != .noneSkipLast
+  }
+
+  func normalizedOrientation() -> UIImage {
+    guard imageOrientation != .up else { return self }
+    guard size.width > 0 && size.height > 0 else { return self }
+
+    let format = UIGraphicsImageRendererFormat.default()
+    format.scale = scale
+    format.opaque = !hasAlpha
+
+    return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      draw(in: CGRect(origin: .zero, size: size))
+    }
   }
 }
