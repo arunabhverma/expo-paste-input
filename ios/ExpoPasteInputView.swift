@@ -23,10 +23,21 @@ private protocol TextInputEnhanceable: UIView {
 extension UITextField: TextInputEnhanceable {}
 extension UITextView: TextInputEnhanceable {}
 
+private enum MediaPayload {
+  case gif(Data)
+  case imageData(Data)
+  case image(UIImage)
+}
+
 class ExpoPasteInputView: ExpoView {
   private let onPaste = EventDispatcher()
+  private let mediaProcessingQueue = DispatchQueue(label: "expo.modules.pasteinput.media-processing", qos: .userInitiated)
   private var textInputView: UIView?
   private var isMonitoring: Bool = false
+  private var textDidChangeObserver: NSObjectProtocol?
+  private weak var observedTextView: UITextView?
+  private var isSanitizingAttachments: Bool = false
+  private var originalAdaptiveImageGlyphSupport: Bool?
   private let gifTypes: Set<String> = ["com.compuserve.gif", "public.gif", "image/gif"]
   private let webpTypes: Set<String> = ["org.webmproject.webp", "public.webp", "image/webp"]
   // Track which classes have been swizzled (once per class, never unswizzle)
@@ -88,15 +99,28 @@ class ExpoPasteInputView: ExpoView {
   }
   
   private func startMonitoring() {
-    guard !isMonitoring else { return }
-    
     // Find TextInput in view hierarchy
-    textInputView = findTextInputInView(self)
-    
-    if let textInput = textInputView {
-      isMonitoring = true
-      enhanceTextInput(textInput)
+    guard let textInput = findTextInputInView(self) else {
+      return
     }
+
+    if let currentTextInput = textInputView,
+       isMonitoring,
+       currentTextInput === textInput {
+      if let textView = textInput as? UITextView {
+        observeTextViewChanges(for: textView)
+      }
+      return
+    }
+
+    if let currentTextInput = textInputView,
+       currentTextInput !== textInput {
+      restoreTextInput(currentTextInput)
+    }
+
+    textInputView = textInput
+    isMonitoring = true
+    enhanceTextInput(textInput)
   }
   
   private func stopMonitoring() {
@@ -113,12 +137,36 @@ class ExpoPasteInputView: ExpoView {
   private func enhanceTextInput(_ view: UIView) {
     // Store weak reference to this wrapper on the text input view to avoid retain cycles
     objc_setAssociatedObject(view, &textInputWrapperKey, WeakWrapper(self), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+
+    if #available(iOS 18.0, *) {
+      originalAdaptiveImageGlyphSupport = currentAdaptiveImageGlyphSupport(for: view)
+      setAdaptiveImageGlyphSupport(true, for: view)
+    } else {
+      originalAdaptiveImageGlyphSupport = nil
+    }
+
+    if let textView = view as? UITextView {
+      observeTextViewChanges(for: textView)
+    } else {
+      stopObservingTextView()
+    }
     
     // Swizzle canPerformAction and paste methods (once per class, never unswizzle)
     swizzleTextInputMethods(view)
   }
   
   private func restoreTextInput(_ view: UIView) {
+    if #available(iOS 18.0, *),
+       let originalAdaptiveImageGlyphSupport {
+      setAdaptiveImageGlyphSupport(originalAdaptiveImageGlyphSupport, for: view)
+    }
+    originalAdaptiveImageGlyphSupport = nil
+
+    if let textView = view as? UITextView,
+       observedTextView === textView {
+      stopObservingTextView()
+    }
+
     // Only clear the association; swizzling stays global and is guarded
     objc_setAssociatedObject(view, &textInputWrapperKey, nil, .OBJC_ASSOCIATION_ASSIGN)
   }
@@ -156,7 +204,7 @@ class ExpoPasteInputView: ExpoView {
               // "App would like to paste" privacy prompt on menu-open checks.
               // We allow paste action visibility and read the pasteboard only
               // when the user explicitly taps Paste in `paste(_:)`.
-              return true
+              return wrapper.shouldExposePasteAction(for: object)
             }
           }
           
@@ -304,6 +352,50 @@ class ExpoPasteInputView: ExpoView {
         }
       }
     }
+
+    if #available(iOS 18.0, *),
+       let originalMethod = class_getInstanceMethod(viewClass, NSSelectorFromString("insertAdaptiveImageGlyph:replacementRange:")) {
+      let adaptiveGlyphSelector = NSSelectorFromString("insertAdaptiveImageGlyph:replacementRange:")
+      let swizzledAdaptiveGlyphSelector = NSSelectorFromString("_expoPasteInput_insertAdaptiveImageGlyph:replacementRange:")
+      let originalAdaptiveGlyphIMP = method_getImplementation(originalMethod)
+
+      if class_getInstanceMethod(viewClass, swizzledAdaptiveGlyphSelector) == nil {
+        let swizzledImplementation: @convention(block) (AnyObject, AnyObject, UITextRange?) -> Void = { object, glyphObject, replacementRange in
+          guard let weakWrapper = objc_getAssociatedObject(object, &textInputWrapperKey) as? WeakWrapper,
+                let wrapper = weakWrapper.value else {
+            typealias OriginalIMP = @convention(c) (AnyObject, Selector, AnyObject, UITextRange?) -> Void
+            let originalFunction = unsafeBitCast(originalAdaptiveGlyphIMP, to: OriginalIMP.self)
+            originalFunction(object, adaptiveGlyphSelector, glyphObject, replacementRange)
+            return
+          }
+
+          guard let adaptiveGlyph = glyphObject as? NSAdaptiveImageGlyph else {
+            typealias OriginalIMP = @convention(c) (AnyObject, Selector, AnyObject, UITextRange?) -> Void
+            let originalFunction = unsafeBitCast(originalAdaptiveGlyphIMP, to: OriginalIMP.self)
+            originalFunction(object, adaptiveGlyphSelector, glyphObject, replacementRange)
+            return
+          }
+
+          if wrapper.handleAdaptiveImageGlyphInsertion(adaptiveGlyph) {
+            return
+          }
+
+          typealias OriginalIMP = @convention(c) (AnyObject, Selector, AnyObject, UITextRange?) -> Void
+          let originalFunction = unsafeBitCast(originalAdaptiveGlyphIMP, to: OriginalIMP.self)
+          originalFunction(object, adaptiveGlyphSelector, glyphObject, replacementRange)
+        }
+
+        let blockIMP = imp_implementationWithBlock(unsafeBitCast(swizzledImplementation, to: AnyObject.self))
+        let types = method_getTypeEncoding(originalMethod)
+
+        if class_addMethod(viewClass, swizzledAdaptiveGlyphSelector, blockIMP, types) {
+          if let swizzledMethod = class_getInstanceMethod(viewClass, swizzledAdaptiveGlyphSelector) {
+            method_exchangeImplementations(originalMethod, swizzledMethod)
+            didSwizzle = true
+          }
+        }
+      }
+    }
     
     // Mark this class as swizzled only if we successfully swizzled at least one method
     // (once per class, never unswizzle)
@@ -325,6 +417,341 @@ class ExpoPasteInputView: ExpoView {
     
     return nil
   }
+
+  @available(iOS 18.0, *)
+  private func currentAdaptiveImageGlyphSupport(for view: UIView) -> Bool? {
+    if let textView = view as? UITextView {
+      return textView.supportsAdaptiveImageGlyph
+    }
+
+    if let textField = view as? UITextField {
+      return textField.supportsAdaptiveImageGlyph
+    }
+
+    return nil
+  }
+
+  @available(iOS 18.0, *)
+  private func setAdaptiveImageGlyphSupport(_ isEnabled: Bool, for view: UIView) {
+    if let textView = view as? UITextView {
+      textView.supportsAdaptiveImageGlyph = isEnabled
+      return
+    }
+
+    if let textField = view as? UITextField {
+      textField.supportsAdaptiveImageGlyph = isEnabled
+    }
+  }
+
+  private func shouldExposePasteAction(for object: AnyObject) -> Bool {
+    if let textView = object as? UITextView {
+      return textView.isEditable &&
+        textView.isSelectable &&
+        textView.isUserInteractionEnabled &&
+        !textView.isHidden &&
+        textView.alpha > 0.01
+    }
+
+    if let textField = object as? UITextField {
+      return textField.isEnabled &&
+        textField.isUserInteractionEnabled &&
+        !textField.isHidden &&
+        textField.alpha > 0.01
+    }
+
+    if let view = object as? UIView {
+      return view.isUserInteractionEnabled &&
+        !view.isHidden &&
+        view.alpha > 0.01
+    }
+
+    return false
+  }
+
+  private func observeTextViewChanges(for textView: UITextView) {
+    if observedTextView === textView, textDidChangeObserver != nil {
+      return
+    }
+
+    stopObservingTextView()
+    observedTextView = textView
+
+    textDidChangeObserver = NotificationCenter.default.addObserver(
+      forName: UITextView.textDidChangeNotification,
+      object: textView,
+      queue: .main
+    ) { [weak self, weak textView] _ in
+      guard let self, let textView else {
+        return
+      }
+
+      self.handleTextViewDidChange(textView)
+    }
+  }
+
+  private func stopObservingTextView() {
+    if let observer = textDidChangeObserver {
+      NotificationCenter.default.removeObserver(observer)
+      textDidChangeObserver = nil
+    }
+
+    observedTextView = nil
+  }
+
+  private func handleTextViewDidChange(_ textView: UITextView) {
+    guard observedTextView === textView, !isSanitizingAttachments else {
+      return
+    }
+
+    let attributedText = textView.attributedText ?? NSAttributedString(string: textView.text ?? "")
+    guard attributedText.length > 0 else {
+      return
+    }
+
+    var attachmentRanges: [NSRange] = []
+    var mediaPayloads: [MediaPayload] = []
+
+    attributedText.enumerateAttribute(.attachment, in: NSRange(location: 0, length: attributedText.length), options: []) { value, range, _ in
+      guard let attachment = value as? NSTextAttachment else {
+        return
+      }
+
+      attachmentRanges.append(range)
+
+      if let payload = self.extractMediaPayload(from: attachment, textView: textView, range: range) {
+        mediaPayloads.append(payload)
+      }
+    }
+
+    if #available(iOS 18.0, *) {
+      attributedText.enumerateAttribute(.adaptiveImageGlyph, in: NSRange(location: 0, length: attributedText.length), options: []) { value, range, _ in
+        guard let adaptiveGlyph = value as? NSAdaptiveImageGlyph else {
+          return
+        }
+
+        attachmentRanges.append(range)
+
+        if let payload = self.extractMediaPayload(from: adaptiveGlyph) {
+          mediaPayloads.append(payload)
+        }
+      }
+    }
+
+    attachmentRanges = uniqueRanges(attachmentRanges)
+
+    guard !attachmentRanges.isEmpty else {
+      return
+    }
+
+    sanitizeAttachments(in: textView, ranges: attachmentRanges)
+
+    guard !mediaPayloads.isEmpty else {
+      handleUnsupportedPaste()
+      return
+    }
+
+    emitImagesAsync(for: mediaPayloads)
+  }
+
+  private func emitImagesAsync(for payloads: [MediaPayload]) {
+    mediaProcessingQueue.async { [weak self] in
+      guard let self else {
+        return
+      }
+
+      let uris = self.temporaryFileURIs(for: payloads)
+
+      DispatchQueue.main.async { [weak self] in
+        guard let self else {
+          return
+        }
+
+        if uris.isEmpty {
+          self.handleUnsupportedPaste()
+          return
+        }
+
+        self.emitImages(uris: uris)
+      }
+    }
+  }
+
+  private func sanitizeAttachments(in textView: UITextView, ranges: [NSRange]) {
+    let sanitizedText = NSMutableAttributedString(attributedString: textView.attributedText ?? NSAttributedString(string: textView.text ?? ""))
+    let originalSelectedRange = textView.selectedRange
+
+    for range in ranges.reversed() {
+      sanitizedText.deleteCharacters(in: range)
+    }
+
+    isSanitizingAttachments = true
+    defer {
+      isSanitizingAttachments = false
+    }
+
+    textView.attributedText = sanitizedText
+
+    guard originalSelectedRange.location != NSNotFound else {
+      return
+    }
+
+    textView.selectedRange = adjustedSelectedRange(
+      from: originalSelectedRange,
+      removing: ranges,
+      finalLength: sanitizedText.length
+    )
+  }
+
+  private func adjustedSelectedRange(from selectedRange: NSRange, removing ranges: [NSRange], finalLength: Int) -> NSRange {
+    let start = adjustedLocation(selectedRange.location, removing: ranges)
+    let end = adjustedLocation(selectedRange.location + selectedRange.length, removing: ranges)
+    let clampedStart = min(max(0, start), finalLength)
+    let clampedEnd = min(max(clampedStart, end), finalLength)
+
+    return NSRange(location: clampedStart, length: clampedEnd - clampedStart)
+  }
+
+  private func adjustedLocation(_ location: Int, removing ranges: [NSRange]) -> Int {
+    var adjustedLocation = location
+
+    for range in ranges {
+      let rangeEnd = NSMaxRange(range)
+
+      if location >= rangeEnd {
+        adjustedLocation -= range.length
+        continue
+      }
+
+      if location >= range.location {
+        adjustedLocation = min(adjustedLocation, range.location)
+        break
+      }
+    }
+
+    return max(0, adjustedLocation)
+  }
+
+  private func uniqueRanges(_ ranges: [NSRange]) -> [NSRange] {
+    var seen = Set<String>()
+    var uniqueRanges: [NSRange] = []
+
+    for range in ranges.sorted(by: { lhs, rhs in
+      if lhs.location == rhs.location {
+        return lhs.length < rhs.length
+      }
+      return lhs.location < rhs.location
+    }) {
+      let key = "\(range.location):\(range.length)"
+      if seen.insert(key).inserted {
+        uniqueRanges.append(range)
+      }
+    }
+
+    return uniqueRanges
+  }
+
+  private func extractMediaPayload(from attachment: NSTextAttachment, textView: UITextView, range: NSRange) -> MediaPayload? {
+    if let fileWrapperData = attachment.fileWrapper?.regularFileContents,
+       let payload = extractMediaPayload(fromData: fileWrapperData) {
+      return payload
+    }
+
+    if let contents = attachment.contents,
+       let payload = extractMediaPayload(fromData: contents) {
+      return payload
+    }
+
+    if let image = attachment.image,
+       image.size.width > 0,
+       image.size.height > 0 {
+      return .image(image)
+    }
+
+    let attachmentBounds = attachment.bounds.size.width > 0 && attachment.bounds.size.height > 0
+      ? attachment.bounds
+      : CGRect(origin: .zero, size: CGSize(width: 128, height: 128))
+
+    if let image = attachment.image(forBounds: attachmentBounds, textContainer: textView.textContainer, characterIndex: range.location),
+       image.size.width > 0,
+       image.size.height > 0 {
+      return .image(image)
+    }
+
+    if let renderedImage = renderTextAttachment(in: textView, range: range) {
+      return .image(renderedImage)
+    }
+
+    return nil
+  }
+
+  @available(iOS 18.0, *)
+  private func extractMediaPayload(from adaptiveGlyph: NSAdaptiveImageGlyph) -> MediaPayload? {
+    extractMediaPayload(fromData: adaptiveGlyph.imageContent)
+  }
+
+  private func extractMediaPayload(fromData data: Data) -> MediaPayload? {
+    guard !data.isEmpty else {
+      return nil
+    }
+
+    if isGIFData(data) {
+      return .gif(data)
+    }
+
+    return .imageData(data)
+  }
+
+  private func renderTextAttachment(in textView: UITextView, range: NSRange) -> UIImage? {
+    let glyphRange = textView.layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+    var rect = textView.layoutManager.boundingRect(forGlyphRange: glyphRange, in: textView.textContainer)
+
+    rect.origin.x += textView.textContainerInset.left - textView.contentOffset.x
+    rect.origin.y += textView.textContainerInset.top - textView.contentOffset.y
+    rect = rect.integral
+
+    guard rect.width > 1, rect.height > 1 else {
+      return nil
+    }
+
+    let format = UIGraphicsImageRendererFormat.default()
+    format.scale = textView.window?.screen.scale ?? UIScreen.main.scale
+    format.opaque = false
+
+    let image = UIGraphicsImageRenderer(size: rect.size, format: format).image { _ in
+      let drawRect = CGRect(
+        origin: CGPoint(x: -rect.origin.x, y: -rect.origin.y),
+        size: textView.bounds.size
+      )
+
+      if textView.window != nil {
+        textView.drawHierarchy(in: drawRect, afterScreenUpdates: false)
+      } else {
+        guard let context = UIGraphicsGetCurrentContext() else {
+          return
+        }
+
+        context.translateBy(x: -rect.origin.x, y: -rect.origin.y)
+        textView.layer.render(in: context)
+      }
+    }
+
+    guard image.size.width > 0, image.size.height > 0 else {
+      return nil
+    }
+
+    return image
+  }
+
+  @available(iOS 18.0, *)
+  private func handleAdaptiveImageGlyphInsertion(_ adaptiveGlyph: NSAdaptiveImageGlyph) -> Bool {
+    guard let payload = extractMediaPayload(from: adaptiveGlyph) else {
+      handleUnsupportedPaste()
+      return true
+    }
+
+    emitImagesAsync(for: [payload])
+    return true
+  }
   
   private func processPasteboardContent() {
     // This method is only called for image pastes
@@ -343,7 +770,7 @@ class ExpoPasteInputView: ExpoView {
     ]
     
     var gifDataItems: [Data] = []
-    var staticImages: [UIImage] = []
+    var staticImagePayloads: [MediaPayload] = []
     var processedGifHashes = Set<Int>()
     
     // Get all items once to ensure consistent access
@@ -396,7 +823,7 @@ class ExpoPasteInputView: ExpoView {
       }
       
       // ===== STEP 2: This item is NOT a GIF - extract static image =====
-      var extractedImage: UIImage? = nil
+      var extractedPayload: MediaPayload? = nil
       
       // Try each static image type in order of preference (only if this item has that type)
       for imageType in staticImageTypes {
@@ -404,26 +831,22 @@ class ExpoPasteInputView: ExpoView {
         
         // Method 1: Try item dictionary directly
         if let imageData = item[imageType] as? Data, !imageData.isEmpty, !isGIFData(imageData) {
-          if let image = safeCreateImage(from: imageData) {
-            extractedImage = image
-            break
-          }
+          extractedPayload = .imageData(imageData)
+          break
         }
         
         // Method 2: Use pasteboard API
-        if extractedImage == nil,
+        if extractedPayload == nil,
            let dataArray = pasteboard.data(forPasteboardType: imageType, inItemSet: singleItemSet),
            let imageData = dataArray.first,
            !imageData.isEmpty, !isGIFData(imageData) {
-          if let image = safeCreateImage(from: imageData) {
-            extractedImage = image
-            break
-          }
+          extractedPayload = .imageData(imageData)
+          break
         }
       }
       
       // Fallback: Try any non-GIF image data from the item dictionary
-      if extractedImage == nil {
+      if extractedPayload == nil {
         // Sort keys to have consistent ordering (prefer png, jpeg, then others)
         let sortedKeys = itemKeys.sorted { k1, k2 in
           let priority1 = k1.contains("png") ? 0 : (k1.contains("jpeg") || k1.contains("jpg") ? 1 : 2)
@@ -439,102 +862,38 @@ class ExpoPasteInputView: ExpoView {
           
           // Try Data
           if let imageData = item[key] as? Data, imageData.count >= 6, !isGIFData(imageData) {
-            if let image = safeCreateImage(from: imageData) {
-              extractedImage = image
-              break
-            }
+            extractedPayload = .imageData(imageData)
+            break
           }
           
           // Try UIImage
           if let image = item[key] as? UIImage, image.size.width > 0, image.size.height > 0 {
-            extractedImage = image
+            extractedPayload = .image(image)
             break
           }
         }
       }
       
       // Add the extracted static image
-      if let image = extractedImage {
-        staticImages.append(image)
+      if let payload = extractedPayload {
+        staticImagePayloads.append(payload)
       }
     }
     
     // Final fallback: If nothing was extracted at all, try pasteboard.image
-    if staticImages.isEmpty && gifDataItems.isEmpty, let image = pasteboard.image {
-      staticImages.append(image)
+    if staticImagePayloads.isEmpty && gifDataItems.isEmpty, let image = pasteboard.image {
+      staticImagePayloads.append(.image(image))
     }
     
-    // Use the collected data
-    let images = staticImages
-    
-    // Handle both GIFs and static images together
-    if !gifDataItems.isEmpty || !images.isEmpty {
-      // Combine GIFs and static images into one paste event
-      var allFilePaths: [String] = []
-      
-      // First, add GIF file paths
-      if !gifDataItems.isEmpty {
-        let tempDir = FileManager.default.temporaryDirectory
-        for gifData in gifDataItems {
-          let fileName = UUID().uuidString + ".gif"
-          let fileURL = tempDir.appendingPathComponent(fileName)
-          
-          do {
-            try gifData.write(to: fileURL)
-            let filePath = "file://" + fileURL.path
-            allFilePaths.append(filePath)
-          } catch {
-            continue // Skip this GIF if we can't save it
-          }
-        }
-      }
-      
-      // Then, add static image file paths
-      if !images.isEmpty {
-        for image in images {
-          let normalizedImage = image.normalizedOrientation()
-          let hasAlpha = normalizedImage.hasAlpha
+    let mediaPayloads = gifDataItems.map { MediaPayload.gif($0) } + staticImagePayloads
 
-          // Preserve transparency for images with alpha channel
-          let imageData: Data?
-          if hasAlpha {
-            imageData = normalizedImage.pngData()
-          } else {
-            imageData = normalizedImage.jpegData(compressionQuality: 0.8)
-          }
-          
-          guard let imageData = imageData else {
-            continue // Skip this image if we can't compress it
-          }
-          
-          let tempDir = FileManager.default.temporaryDirectory
-          let fileExtension = hasAlpha ? ".png" : ".jpg"
-          let fileName = UUID().uuidString + fileExtension
-          let fileURL = tempDir.appendingPathComponent(fileName)
-          
-          do {
-            try imageData.write(to: fileURL)
-            let filePath = "file://" + fileURL.path
-            allFilePaths.append(filePath)
-          } catch {
-            continue // Skip this image if we can't save it
-          }
-        }
-      }
-      
-      if !allFilePaths.isEmpty {
-        // Send all images (GIFs and static) in one event
-        onPaste([
-          "type": "images",
-          "uris": allFilePaths
-        ])
-      } else {
-        handleUnsupportedPaste()
-      }
-    } else {
+    if mediaPayloads.isEmpty {
       // If we have neither GIFs nor images, treat as unsupported
       handleUnsupportedPaste()
+      return
     }
+
+    emitImagesAsync(for: mediaPayloads)
   }
   
   /// Detects if the given data is a GIF by checking for GIF87a or GIF89a header
@@ -604,9 +963,97 @@ class ExpoPasteInputView: ExpoView {
       "type": "unsupported"
     ])
   }
+
+  private func emitImages(uris: [String]) {
+    guard !uris.isEmpty else {
+      return
+    }
+
+    onPaste([
+      "type": "images",
+      "uris": uris
+    ])
+  }
+
+  private func temporaryFileURIs(for payloads: [MediaPayload]) -> [String] {
+    var uris: [String] = []
+
+    for payload in payloads {
+      switch payload {
+      case .gif(let data):
+        if let uri = writeTemporaryGIF(data) {
+          uris.append(uri)
+        }
+      case .imageData(let data):
+        if let uri = writeTemporaryImageData(data) {
+          uris.append(uri)
+        }
+      case .image(let image):
+        if let uri = writeTemporaryImage(image) {
+          uris.append(uri)
+        }
+      }
+    }
+
+    return uris
+  }
+
+  private func writeTemporaryGIF(_ data: Data) -> String? {
+    guard !data.isEmpty else {
+      return nil
+    }
+
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension("gif")
+
+    do {
+      try data.write(to: fileURL)
+      return fileURL.absoluteString
+    } catch {
+      return nil
+    }
+  }
+
+  private func writeTemporaryImageData(_ data: Data) -> String? {
+    guard let image = safeCreateImage(from: data) else {
+      return nil
+    }
+
+    return writeTemporaryImage(image)
+  }
+
+  private func writeTemporaryImage(_ image: UIImage) -> String? {
+    let normalizedImage = image.normalizedOrientation()
+    let hasAlpha = normalizedImage.hasAlpha
+
+    let imageData: Data?
+    if hasAlpha {
+      imageData = normalizedImage.pngData()
+    } else {
+      imageData = normalizedImage.jpegData(compressionQuality: 0.8)
+    }
+
+    guard let imageData else {
+      return nil
+    }
+
+    let fileExtension = hasAlpha ? "png" : "jpg"
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension(fileExtension)
+
+    do {
+      try imageData.write(to: fileURL)
+      return fileURL.absoluteString
+    } catch {
+      return nil
+    }
+  }
   
   deinit {
     stopMonitoring()
+    stopObservingTextView()
   }
 
   private func hasPasteboardData(forAnyTypeIn types: Set<String>, pasteboard: UIPasteboard) -> Bool {
