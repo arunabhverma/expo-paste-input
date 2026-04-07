@@ -11,7 +11,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ActionMode
 import android.widget.EditText
-import kotlin.math.max
 import androidx.core.view.ContentInfoCompat
 import androidx.core.view.OnReceiveContentListener
 import androidx.core.view.ViewCompat
@@ -61,91 +60,45 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     })
   }
 
-  /**
-   * Ensure this wrapper behaves like a normal container in React Native layouts.
-   *
-   * Without an explicit measure/layout pass-through, some parent layouts can end up
-   * treating this view as having near-zero height, collapsing the wrapped EditText.
-   */
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-    var maxChildWidth = 0
-    var maxChildHeight = 0
-    var childState = 0
+    // Let the wrapper resolve its own size first, then size children to the
+    // resolved content box so wrapped RN inputs can fill like a normal container.
+    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+
+    val availableWidth = (measuredWidth - paddingLeft - paddingRight).coerceAtLeast(0)
+    val availableHeight = (measuredHeight - paddingTop - paddingBottom).coerceAtLeast(0)
+
+    val childWidthSpec = MeasureSpec.makeMeasureSpec(availableWidth, MeasureSpec.EXACTLY)
+    val childHeightSpec = MeasureSpec.makeMeasureSpec(availableHeight, MeasureSpec.EXACTLY)
 
     for (i in 0 until childCount) {
       val child = getChildAt(i)
-      if (child.visibility == View.GONE) continue
-
-      val lp = child.layoutParams
-      if (lp is MarginLayoutParams) {
-        measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, 0)
-        maxChildWidth = max(maxChildWidth, child.measuredWidth + lp.leftMargin + lp.rightMargin)
-        maxChildHeight = max(maxChildHeight, child.measuredHeight + lp.topMargin + lp.bottomMargin)
-      } else {
-        measureChild(child, widthMeasureSpec, heightMeasureSpec)
-        maxChildWidth = max(maxChildWidth, child.measuredWidth)
-        maxChildHeight = max(maxChildHeight, child.measuredHeight)
+      if (child.visibility != View.GONE) {
+        child.measure(childWidthSpec, childHeightSpec)
       }
-
-      childState = View.combineMeasuredStates(childState, child.measuredState)
     }
-
-    maxChildWidth += paddingLeft + paddingRight
-    maxChildHeight += paddingTop + paddingBottom
-
-    val measuredWidth = View.resolveSizeAndState(maxChildWidth, widthMeasureSpec, childState)
-    val measuredHeight =
-      View.resolveSizeAndState(maxChildHeight, heightMeasureSpec, childState shl View.MEASURED_HEIGHT_STATE_SHIFT)
-
-    setMeasuredDimension(measuredWidth, measuredHeight)
   }
 
   override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-    val parentLeft = paddingLeft
-    val parentTop = paddingTop
-    val parentRight = r - l - paddingRight
+    val left = paddingLeft
+    val top = paddingTop
+    val right = (r - l - paddingRight).coerceAtLeast(left)
+    val bottom = (b - t - paddingBottom).coerceAtLeast(top)
 
     for (i in 0 until childCount) {
       val child = getChildAt(i)
-      if (child.visibility == View.GONE) continue
-
-      val lp = child.layoutParams
-      val left: Int
-      val top: Int
-      val right: Int
-      val bottom: Int
-
-      if (lp is MarginLayoutParams) {
-        left = parentLeft + lp.leftMargin
-        top = parentTop + lp.topMargin
-        right = (parentRight - lp.rightMargin).coerceAtLeast(left)
-        bottom = (top + child.measuredHeight).coerceAtMost(b - t - paddingBottom - lp.bottomMargin)
-      } else {
-        left = parentLeft
-        top = parentTop
-        right = parentRight.coerceAtLeast(left)
-        bottom = (top + child.measuredHeight).coerceAtMost(b - t - paddingBottom)
+      if (child.visibility != View.GONE) {
+        child.layout(left, top, right, bottom)
       }
-
-      child.layout(left, top, right, bottom)
     }
   }
-  
-  // Pass through all touch events to children - never intercept
-  override fun onInterceptTouchEvent(ev: android.view.MotionEvent?): Boolean {
-    return false
-  }
-  
-  override fun onTouchEvent(event: android.view.MotionEvent?): Boolean {
-    return false
-  }
-  
-  override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
-    return super.dispatchTouchEvent(ev)
-  }
-  
+
   override fun onViewAdded(child: View?) {
     super.onViewAdded(child)
+    // Let default container sizing recalculate after RN inserts a child.
+    requestLayout()
+    invalidate()
+
     // Re-scan for text input when a new child is added
     if (!isMonitoring) {
       startMonitoring()
