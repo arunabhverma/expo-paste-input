@@ -1,21 +1,21 @@
 # expo-paste-input
 
-`expo-paste-input` is a lightweight wrapper around React Native `TextInput` that lets users paste images and GIFs directly from the system clipboard on **iOS and Android**.
+`expo-paste-input` is a lightweight wrapper around React Native `TextInput` that lets users paste images, stickers, and GIFs directly from the system clipboard on **iOS and Android**.
 
 It works at the native level to intercept paste events before React Native handles them, giving you access to pasted media as local file URIs while keeping full control over your own `TextInput` component.
+On iOS, it also uses native text-input hooks to capture keyboard stickers that are not always exposed like normal clipboard image data.
 
 See the original demo on [Twitter](https://x.com/iamarunabh/status/1997738168247062774)
 
-| iOS | Android |
-| --- | --- |
+| iOS                                                                                           | Android                                                                                       |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | <img src="https://github.com/user-attachments/assets/c7d9baac-b2f8-4942-9a7f-52932e65ae7e" /> | <img src="https://github.com/user-attachments/assets/6057745c-ccfc-4ca0-935d-9aa4668f22e3" /> |
-
 
 ---
 
 ## Features
 
-- Paste **text, images, and multiple GIFs**
+- Paste **text, images, stickers, and multiple GIFs**
 - Works on **iOS and Android**
 - True wrapper around `TextInput` (bring your own input)
 - No custom UI, no opinionated styles
@@ -31,7 +31,7 @@ See the original demo on [Twitter](https://x.com/iamarunabh/status/1997738168247
 
 ```bash
 npx expo install expo-paste-input
-````
+```
 
 or
 
@@ -93,9 +93,9 @@ type PasteEventPayload =
   | { type: "unsupported" };
 ```
 
-* `text` → pasted text
-* `images` → local file URIs (`file://...`)
-* `unsupported` → anything else
+- `text` → pasted text
+- `images` → local file URIs (`file://...`)
+- `unsupported` → anything else
 
 ---
 
@@ -113,10 +113,10 @@ Instead:
 
 This means:
 
-* you keep full control of your input
-* works with any custom TextInput
-* no prop mirroring
-* future-proof with RN updates
+- you keep full control of your input
+- works with any custom TextInput
+- no prop mirroring
+- future-proof with RN updates
 
 ---
 
@@ -124,25 +124,27 @@ This means:
 
 ### iOS
 
-* Intercepts native `paste(_:)`
-* Extracts images from `UIPasteboard`
-* Saves to temp files
-* Preserves GIFs
+- Intercepts native `paste(_:)`
+- Extracts images from `UIPasteboard`
+- Saves to temp files
+- Preserves GIFs and stickers
+- Adds native sticker handling for iOS keyboard media using text-input hooks (including adaptive image glyph insertion), because stickers are not always exposed like normal clipboard image data
 
 ### Android
 
-* Uses `OnReceiveContentListener` + `ActionMode`
-* Prevents Android "Can't paste images" toast
-* Saves pasted media to cache
+- Uses `OnReceiveContentListener` + `ActionMode`
+- Prevents Android "Can't paste images" toast
+- Saves pasted media to cache
+- Stickers and images are handled through regular clipboard/content APIs
 
 ---
 
 ## Notes
 
-* Image URIs are temporary files, move them if you need persistence.
-* Text paste events fire after the text is inserted.
-* Image paste events prevent default paste (since TextInput can't render images).
-* Web is currently a no-op implementation.
+- Image URIs are temporary files, move them if you need persistence.
+- Text paste events fire after the text is inserted.
+- Image paste events prevent default paste (since TextInput can't render images).
+- Web is currently a no-op implementation.
 
 ---
 
