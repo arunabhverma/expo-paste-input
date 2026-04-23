@@ -857,32 +857,32 @@ class ExpoPasteInputView: ExpoView {
     return headerBytes == gif87aSignature || headerBytes == gif89aSignature
   }
   
-  /// Safely creates a UIImage from data, validating it first to prevent ImageIO errors
-  private func safeCreateImage(from data: Data) -> UIImage? {
-    guard data.count > 0 else { return nil }
-    
-    // Use ImageIO to validate the data before creating UIImage
-    // This prevents ImageIO errors from corrupted or invalid image data
-    guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil) else {
-      return nil
+  private func inferredImageFileExtension(from imageSource: CGImageSource, fallbackData data: Data) -> String {
+    if let type = CGImageSourceGetType(imageSource) as String? {
+      switch type {
+      case "public.png":
+        return "png"
+      case "public.jpeg":
+        return "jpg"
+      case "public.gif":
+        return "gif"
+      case "public.webp", "org.webmproject.webp":
+        return "webp"
+      case "public.heic":
+        return "heic"
+      case "public.heif":
+        return "heif"
+      case "public.tiff":
+        return "tiff"
+      default:
+        break
+      }
     }
-    
-    // Check if the image source has at least one image
-    guard CGImageSourceGetCount(imageSource) > 0 else {
-      return nil
+
+    if isGIFData(data) {
+      return "gif"
     }
-    
-    // Create UIImage from the original data so imageOrientation from metadata is preserved.
-    guard let image = UIImage(data: data) else {
-      return nil
-    }
-    
-    // Validate the image has valid dimensions
-    guard image.size.width > 0 && image.size.height > 0 else {
-      return nil
-    }
-    
-    return image
+    return "png"
   }
   
   private func processTextPaste() {
@@ -963,11 +963,22 @@ class ExpoPasteInputView: ExpoView {
   }
 
   private func writeTemporaryImageData(_ data: Data) -> String? {
-    guard let image = safeCreateImage(from: data) else {
+    guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
+          CGImageSourceGetCount(imageSource) > 0 else {
       return nil
     }
 
-    return writeTemporaryImage(image)
+    let fileExtension = inferredImageFileExtension(from: imageSource, fallbackData: data)
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathExtension(fileExtension)
+
+    do {
+      try data.write(to: fileURL)
+      return fileURL.absoluteString
+    } catch {
+      return nil
+    }
   }
 
   private func writeTemporaryImage(_ image: UIImage) -> String? {
