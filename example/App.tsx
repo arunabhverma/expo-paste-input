@@ -78,9 +78,9 @@ const InputToolbar = () => {
   const scrollViewPadding = useSharedValue(0);
   const itemWidth = useSharedValue(0);
   const [attachments, setAttachments] = useState<{ id: string; uri: string }[]>(
-    []
+    [],
   );
-
+  const [value, setValue] = useState("");
   useEffect(() => {
     scrollViewPadding.value = withSpring(0);
   }, [attachments, scrollViewPadding]);
@@ -165,7 +165,7 @@ const InputToolbar = () => {
                       }
 
                       setAttachments((prev) =>
-                        prev.filter((attachment) => attachment.id !== item.id)
+                        prev.filter((attachment) => attachment.id !== item.id),
                       );
                     }}
                   />
@@ -188,6 +188,8 @@ const InputToolbar = () => {
           <Animated.View layout={LinearTransition.springify()}>
             <TextInputWrapper onPaste={onPaste}>
               <TextInput
+                value={value}
+                onChangeText={setValue}
                 multiline
                 placeholder="Type a message"
                 placeholderTextColor={theme.colors.border}
@@ -294,7 +296,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 10,
     fontSize: 16,
-    height: 40,
+    minHeight: 40,
     maxHeight: 200,
   },
   inputContainer: {
