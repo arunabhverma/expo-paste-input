@@ -34,6 +34,7 @@ class ExpoPasteInputView: ExpoView {
   private let mediaProcessingQueue = DispatchQueue(label: "expo.modules.pasteinput.media-processing", qos: .userInitiated)
   private var textInputView: UIView?
   private var isMonitoring: Bool = false
+  var disabled: Bool = false
   private var textDidChangeObserver: NSObjectProtocol?
   private weak var observedTextView: UITextView?
   private var isSanitizingAttachments: Bool = false
@@ -197,8 +198,10 @@ class ExpoPasteInputView: ExpoView {
           // Check if this text input is associated with a wrapper
           if let weakWrapper = objc_getAssociatedObject(object, &textInputWrapperKey) as? WeakWrapper,
              let wrapper = weakWrapper.value {
-            // Only process if this is our wrapped text input
             if action == #selector(UIResponderStandardEditActions.paste(_:)) {
+              if wrapper.disabled {
+                return false
+              }
               // IMPORTANT:
               // Do not read UIPasteboard content here. iOS may show the
               // "App would like to paste" privacy prompt on menu-open checks.
@@ -242,7 +245,7 @@ class ExpoPasteInputView: ExpoView {
           // Check if this text input is associated with a wrapper
           guard let weakWrapper = objc_getAssociatedObject(object, &textInputWrapperKey) as? WeakWrapper,
                 let wrapper = weakWrapper.value else {
-            // Not our text input, call original and return
+            // Not our text input — call original and return
             if let originalIMP = originalPasteIMP {
               typealias OriginalIMP = @convention(c) (AnyObject, Selector, Any?) -> Void
               let originalFunction = unsafeBitCast(originalIMP, to: OriginalIMP.self)
@@ -250,7 +253,10 @@ class ExpoPasteInputView: ExpoView {
             }
             return
           }
-          
+
+          // Paste is disabled — block entirely (no native fallthrough)
+          guard !wrapper.disabled else { return }
+
           let pasteboard = UIPasteboard.general
           
           // CRITICAL: Check for GIFs FIRST using explicit type queries
@@ -362,7 +368,8 @@ class ExpoPasteInputView: ExpoView {
       if class_getInstanceMethod(viewClass, swizzledAdaptiveGlyphSelector) == nil {
         let swizzledImplementation: @convention(block) (AnyObject, AnyObject, UITextRange?) -> Void = { object, glyphObject, replacementRange in
           guard let weakWrapper = objc_getAssociatedObject(object, &textInputWrapperKey) as? WeakWrapper,
-                let wrapper = weakWrapper.value else {
+                let wrapper = weakWrapper.value,
+                !wrapper.disabled else {
             typealias OriginalIMP = @convention(c) (AnyObject, Selector, AnyObject, UITextRange?) -> Void
             let originalFunction = unsafeBitCast(originalAdaptiveGlyphIMP, to: OriginalIMP.self)
             originalFunction(object, adaptiveGlyphSelector, glyphObject, replacementRange)
@@ -499,7 +506,7 @@ class ExpoPasteInputView: ExpoView {
   }
 
   private func handleTextViewDidChange(_ textView: UITextView) {
-    guard observedTextView === textView, !isSanitizingAttachments else {
+    guard observedTextView === textView, !isSanitizingAttachments, !disabled else {
       return
     }
 

@@ -12,7 +12,7 @@ export const TextInputWrapperView = React.forwardRef<
   View,
   TextInputWrapperViewProps
 >((props, ref) => {
-  const { onPaste, children, ...viewProps } = props;
+  const { onPaste, disabled, children, ...viewProps } = props;
 
   const handlePaste = React.useCallback(
     (event: { nativeEvent: PasteEventPayload }) => {
@@ -25,7 +25,7 @@ export const TextInputWrapperView = React.forwardRef<
   );
 
   return (
-    <NativeTextInputWrapper ref={ref} onPaste={handlePaste} {...viewProps}>
+    <NativeTextInputWrapper ref={ref} onPaste={handlePaste} disabled={disabled} {...viewProps}>
       {children}
     </NativeTextInputWrapper>
   );

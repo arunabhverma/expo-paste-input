@@ -24,6 +24,7 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
   private val onPaste by EventDispatcher()
   private var textInputView: EditText? = null
   private var isMonitoring: Boolean = false
+  var disabled: Boolean = false
   private var contentListener: OnReceiveContentListener? = null
   private var originalSelectionActionModeCallback: ActionMode.Callback? = null
   private var originalInsertionActionModeCallback: ActionMode.Callback? = null
@@ -176,6 +177,9 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
   
   private fun createContentListener(): OnReceiveContentListener {
     return OnReceiveContentListener { _, payload ->
+      if (disabled) {
+        return@OnReceiveContentListener null
+      }
       if (shouldSuppressOnReceiveContent()) {
         return@OnReceiveContentListener null
       }
@@ -240,7 +244,10 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
         }
         
         override fun onPrepareActionMode(mode: ActionMode?, menu: android.view.Menu?): Boolean {
-          // Delegate to original callback if it exists
+          if (disabled) {
+            menu?.removeItem(android.R.id.paste)
+            return true
+          }
           return originalCallback?.onPrepareActionMode(mode, menu) ?: false
         }
         
@@ -266,6 +273,11 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     item: android.view.MenuItem,
     originalCallback: ActionMode.Callback?
   ): Boolean {
+    if (disabled) {
+      mode?.finish()
+      return true
+    }
+
     val clipboard = editText.context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val parsed = parseClipboardPayload(clipboard.primaryClip, editText.context)
     

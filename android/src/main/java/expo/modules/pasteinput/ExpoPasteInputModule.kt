@@ -9,6 +9,10 @@ class ExpoPasteInputModule : Module() {
     
     View(ExpoPasteInputView::class) {
       Events("onPaste")
+
+      Prop("disabled") { view: ExpoPasteInputView, disabled: Boolean ->
+        view.disabled = disabled
+      }
     }
   }
 }
