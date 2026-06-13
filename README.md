@@ -161,3 +161,13 @@ Inspired by work from:
 ## License
 
 MIT
+
+---
+
+## Maintained by
+
+expo-paste-input is built and maintained by [Arunabh Verma](https://arunabhverma.com).
+
+Founder of [Powstać](https://powstac.com) - a software consultancy focused on polished, high-performance mobile experiences.
+
+X: [@imarunabh](https://x.com/imarunabh)
