@@ -6,6 +6,10 @@ public class ExpoPasteInputModule: Module {
     
     View(ExpoPasteInputView.self) {
       Events("onPaste")
+
+      Prop("disabled") { (view: ExpoPasteInputView, disabled: Bool) in
+        view.disabled = disabled
+      }
     }
   }
 }

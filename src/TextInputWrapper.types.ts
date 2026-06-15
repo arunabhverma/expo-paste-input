@@ -13,6 +13,13 @@ export interface TextInputWrapperViewProps extends ViewProps {
   onPaste?: (payload: PasteEventPayload) => void;
 
   /**
+   * When true, the Paste option is hidden from the context menu and all paste
+   * actions are blocked — content will not be inserted and `onPaste` will not fire.
+   * @default false
+   */
+  disabled?: boolean;
+
+  /**
    * Child components to wrap. Typically a TextInput component.
    */
   children?: React.ReactNode;
