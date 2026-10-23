@@ -4,6 +4,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
@@ -14,6 +15,7 @@ import android.widget.EditText
 import androidx.core.view.ContentInfoCompat
 import androidx.core.view.OnReceiveContentListener
 import androidx.core.view.ViewCompat
+import androidx.exifinterface.media.ExifInterface
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.viewevent.EventDispatcher
 import expo.modules.kotlin.views.ExpoView
@@ -430,11 +432,15 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
         
         // Use try-with-resources equivalent (use block) to ensure stream is closed
         inputStream.use { stream ->
-          val bitmap = BitmapFactory.decodeStream(stream)
+          val decodedBitmap = BitmapFactory.decodeStream(stream)
           
-          if (bitmap == null) {
+          if (decodedBitmap == null) {
             return@use // Skip this image if we can't decode it
           }
+          
+          // BitmapFactory ignores the EXIF orientation tag and the re-encoded file
+          // carries no EXIF, so apply the orientation to the pixels here
+          val bitmap = applyExifOrientation(decodedBitmap, readExifOrientation(uri))
           
           // Save to cache directory
           val cacheDir = context.cacheDir
@@ -471,6 +477,46 @@ class ExpoPasteInputView(context: Context, appContext: AppContext) : ExpoView(co
     } catch (e: Exception) {
       handleUnsupportedPaste()
     }
+  }
+  
+  private fun readExifOrientation(uri: Uri): Int {
+    return try {
+      context.contentResolver.openInputStream(uri)?.use { stream ->
+        ExifInterface(stream).getAttributeInt(
+          ExifInterface.TAG_ORIENTATION,
+          ExifInterface.ORIENTATION_NORMAL
+        )
+      } ?: ExifInterface.ORIENTATION_NORMAL
+    } catch (e: Exception) {
+      // Unreadable metadata keeps the decoded pixels as they are
+      ExifInterface.ORIENTATION_NORMAL
+    }
+  }
+  
+  private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+    val matrix = Matrix()
+    when (orientation) {
+      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
+      ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
+      ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
+      ExifInterface.ORIENTATION_TRANSPOSE -> {
+        matrix.setRotate(90f)
+        matrix.postScale(-1f, 1f)
+      }
+      ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+      ExifInterface.ORIENTATION_TRANSVERSE -> {
+        matrix.setRotate(-90f)
+        matrix.postScale(-1f, 1f)
+      }
+      ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f)
+      else -> return bitmap
+    }
+    
+    val orientedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    if (orientedBitmap !== bitmap) {
+      bitmap.recycle()
+    }
+    return orientedBitmap
   }
   
   private fun copyGifFile(uri: Uri): String? {
